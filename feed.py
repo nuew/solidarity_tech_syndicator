@@ -224,6 +224,11 @@ def app(environ, start_response):
         return []
 
 
-from wsgiref.simple_server import make_server
-with make_server('', 8080, app) as httpd:
-    httpd.serve_forever()
+if __name__ == "__main__":
+    from wsgiref.simple_server import make_server
+    import sys
+
+    port = int(sys.argv[1]) if len(sys.argv) > 1 else 8080
+    host = sys.argv[2] if len(sys.argv) > 2 else ''
+    with make_server(host, port, app) as httpd:
+        httpd.serve_forever()
