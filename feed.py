@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from lxml import etree as ET
 import datetime
+import itertools
 import requests
 import typing
 import wsgiref.util
@@ -12,6 +13,7 @@ APP_VERSION = '0.0.0'
 NS_ATOM = 'http://www.w3.org/2005/Atom'
 MIME_ATOM = 'application/atom+xml'
 MIME_HTML = 'text/html'
+MIME_URI_LIST = 'text/uri-list'
 
 # premade atom XML-namespaced tags
 ATOM_AUTHOR = ET.QName(NS_ATOM, 'author')
@@ -202,17 +204,21 @@ class Feed:
         return ET.tostring(feed, encoding='utf-8')
 
 
-feeds = {
-    'posts.xml': Feed('https://demo.solidarity.tech/posts')
-}
+feeds = {'posts.xml': Feed('https://demo.solidarity.tech/posts')}
 
 
 def app(environ, start_response):
     path = environ['PATH_INFO'][1:]
-    if path in feeds:
+    if path in feeds:  # show feed
         atom = feeds[path].atom(wsgiref.util.request_uri(environ))
-        start_response('200 OK', [('Content-type', MIME_ATOM)])
+        start_response('200 OK', [('Content-Type', MIME_ATOM)])
         return [atom]
+    elif len(path) == 0:  # show list of feeds as a URI list for default index
+        start_response('200 OK', [('Content-Type', MIME_URI_LIST)])
+        app = wsgiref.util.application_uri(environ)
+        brand = f'# {APP_NAME} {APP_VERSION} <{APP_URI}>\r\n'
+        urls = (f'{app}{feed}\r\n' for feed in feeds.keys())
+        return (t.encode('utf-8') for t in itertools.chain(brand, urls))
     else:
         start_response('404 Not Found', [])
         return []
