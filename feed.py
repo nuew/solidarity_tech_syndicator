@@ -1,21 +1,27 @@
 #!/usr/bin/env python3
 from lxml import etree as ET
-import datetime
+import datetime as dt
 import itertools
 import requests
 import typing
 import wsgiref.util
+import config
 
 # constants
 APP_NAME = 'solidarity.tech syndicator'
 APP_URI = 'https://github.com/nuew/solidarity_tech_syndicator'
 APP_VERSION = '0.0.0'
-NS_ATOM = 'http://www.w3.org/2005/Atom'
 MIME_ATOM = 'application/atom+xml'
 MIME_HTML = 'text/html'
 MIME_URI_LIST = 'text/uri-list'
+NS_ATOM = 'http://www.w3.org/2005/Atom'
+NS_XML = 'http://www.w3.org/XML/1998/namespace'
 
-# premade atom XML-namespaced tags
+NSMAP = {None: NS_ATOM, 'xml': NS_XML}
+USER_AGENT = f'{APP_NAME}/{APP_VERSION} ({APP_URI})'
+REQUESTS_HEADERS = {'User-Agent': USER_AGENT, 'From': config.OPERATOR_EMAIL}
+
+# premade XML-namespaced tags
 ATOM_AUTHOR = ET.QName(NS_ATOM, 'author')
 ATOM_CONTENT = ET.QName(NS_ATOM, 'content')
 ATOM_EMAIL = ET.QName(NS_ATOM, 'email')
@@ -36,6 +42,22 @@ ATOM_TYPE = ET.QName(NS_ATOM, 'type')
 ATOM_UPDATED = ET.QName(NS_ATOM, 'updated')
 ATOM_URI = ET.QName(NS_ATOM, 'uri')
 ATOM_VERSION = ET.QName(NS_ATOM, 'version')
+XML_BASE = ET.QName(NS_XML, 'base')
+
+
+def getTextContent(e: ET.Element) -> Optional[str]:
+    '''Returns stripped text if available'''
+    return e.text.strip() if e.text is not None else None
+
+
+def getByPath(
+        rel: ET.Element,
+        selector: str,
+        f: Callable[ET.Element,
+                    Optional[str]] = getTextContent) -> Optional[str]:
+    '''A gross and poor attempt at simulating monads for this one use case'''
+    elem = rel.find(selector)
+    return f(elem) if elem is not None else None
 
 
 class Person:
@@ -78,23 +100,37 @@ class Post:
                  url: str,
                  title: str,
                  summary: str,
-                 published: datetime.datetime,
-                 updated: Optional[datetime.datetime] = None):
+                 published: dt.datetime,
+                 updated: Optional[dt.datetime] = None):
         self.url = url
         self.title = title
         self.summary = summary
         self.published = published
         self.updated = updated if updated is not None else published
 
-    def fromElement(post: ET.Element):
-        url = post.get('href')
-        title = post.find(".//h4[@class='pb-blog-post-title']").text.strip()
-        summary = post.find(
-            ".//div[@class='pb-blog-post-excerpt']").text.strip()
-        published = post.find(".//span[@class='pb-blog-post-date']/time").get(
-            'datetime')
-        return Post(url, title, summary,
-                    datetime.datetime.fromisoformat(published))
+    def fromElement(post: ET.Element) -> Post:
+        '''Creates a Post class from an element on a page of posts'''
+
+        url = getByPath(post, config.XPATH_POST_LINK, lambda e: e.get('href'))
+        title = getByPath(post, config.XPATH_POST_TITLE)
+        summary = getByPath(post, config.XPATH_POST_SUMMARY)
+
+        # parse publication datetime, either with strptime from element content or by attribute
+        # from an HTML time element
+        published = post.find(config.XPATH_POST_DATETIME)
+        if published is None:
+            pass  # published should stay as None
+        elif config.DATETIME_STRPTIME is not None:
+            published = dt.datetime.strptime(getTextContent(published),
+                                             config.DATETIME_STRPTIME)
+        else:
+            published = dt.datetime.fromisoformat(published.get('datetime'))
+
+        # ensure that all datetimes have a timezone, even if we have to guess
+        if published.tzinfo is None:
+            published = published.replace(tzinfo=config.DATETIME_DEFAULT_TZ)
+
+        return Post(url, title, summary, published)
 
     def atom(self) -> ET.Element:
         '''Generate an Atom entry corresponding to this Post'''
@@ -102,10 +138,8 @@ class Post:
         ET.SubElement(entry, ATOM_ID).text = self.url
         ET.SubElement(entry, ATOM_TITLE).text = self.title
         ET.SubElement(entry, ATOM_PUBLISHED).text = self.published.isoformat()
-        ET.SubElement(entry, ATOM_UPDATED).text = self.published.isoformat()
-        ET.SubElement(entry, ATOM_LINK, attrib={
-            'rel': 'alternate'
-        }).text = self.url
+        ET.SubElement(entry, ATOM_UPDATED).text = self.updated.isoformat()
+        ET.SubElement(entry, ATOM_LINK, rel='alternate', href=self.url)
         ET.SubElement(entry,
                       ATOM_CONTENT,
                       attrib={
@@ -123,38 +157,38 @@ class Feed:
     def __init__(self, url: str):
         self.url = url
         # we need a timezone here to avoid TypeErrors
-        self.updated = datetime.datetime(1, 1, 1, tzinfo=datetime.timezone.utc)
+        self.updated = dt.datetime(1, 1, 1, tzinfo=dt.timezone.utc)
 
     def _update(self):
         '''Update feed if we last updated at least an hour ago'''
-        if self.updated <= (datetime.datetime.now(datetime.timezone.utc) -
-                            datetime.timedelta(hours=1)):
+        if self.updated <= (dt.datetime.now(dt.timezone.utc) -
+                            config.SCRAPE_REFRESH):
             self._scrape()
 
     def _scrape(self):
         '''Scrape Solidarity.Tech blog page'''
 
         # get and parse webpage
-        r = requests.get(
-            self.url,
-            headers={'User-Agent': f'{APP_NAME}/{APP_VERSION} ({APP_URI})'})
+        r = requests.get(self.url, headers=REQUESTS_HEADERS)
         html = ET.fromstring(r.text, ET.HTMLParser())
 
         # extract data
-        self.updated = datetime.datetime.now(datetime.timezone.utc)
-        self.title = html.find("./head/title").text.strip()
-        self.author = Person(
-            html.find(".//span[@data-pb-field='website_name']").text.strip(),
-            html.find(".//a[@class='pb-nav-logo-link']").get('href'))
-        self.icon = html.find("./head/link[@rel='icon']").get('href')
+        self.updated = dt.datetime.now(dt.timezone.utc)
+        self.title = getByPath(html, config.XPATH_TITLE)
+        self.author = Person(  # the author; URL and Email are optional
+            getByPath(html, config.XPATH_AUTHOR_NAME),
+            getByPath(html, config.XPATH_AUTHOR_URL, lambda e: e.get('href'))
+            if config.XPATH_AUTHOR_URL is not None else None,
+            getByPath(html, config.XPATH_AUTHOR_EMAIL)
+            if config.XPATH_AUTHOR_EMAIL is not None else None)
+        self.icon = getByPath(html, config.XPATH_ICON, lambda e: e.get('href'))
         self.posts = [
-            Post.fromElement(p)
-            for p in html.iterfind(".//a[@class='pb-blog-post-card']")
+            Post.fromElement(p) for p in html.iterfind(config.XPATH_POSTS)
         ]
 
     def atom(self, self_uri: str) -> bytes:
         self._update()  # make sure feed is reasonably up to date
-        feed = ET.Element(ATOM_FEED, nsmap={None: NS_ATOM})
+        feed = ET.Element(ATOM_FEED, attrib={XML_BASE: self.url}, nsmap=NSMAP)
 
         # feed generator (for branding and debug)
         ET.SubElement(feed,
@@ -204,7 +238,8 @@ class Feed:
         return ET.tostring(feed, encoding='utf-8')
 
 
-feeds = {'posts.xml': Feed('https://demo.solidarity.tech/posts')}
+# global singleton containing all feeds and their internal caches
+feeds = {path: Feed(feed) for path, feed in config.FEEDS.items()}
 
 
 def app(environ, start_response):
@@ -216,7 +251,7 @@ def app(environ, start_response):
     elif len(path) == 0:  # show list of feeds as a URI list for default index
         start_response('200 OK', [('Content-Type', MIME_URI_LIST)])
         app = wsgiref.util.application_uri(environ)
-        brand = f'# {APP_NAME} {APP_VERSION} <{APP_URI}>\r\n'
+        brand = f'# {USER_AGENT}\r\n'
         urls = (f'{app}{feed}\r\n' for feed in feeds.keys())
         return (t.encode('utf-8') for t in itertools.chain(brand, urls))
     else:
