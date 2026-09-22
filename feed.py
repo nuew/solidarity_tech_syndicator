@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 from lxml import etree as ET
+from typing import Callable, Optional
+import config
 import datetime as dt
 import itertools
 import requests
-import typing
 import wsgiref.util
-import config
 
 # constants
 APP_NAME = 'solidarity.tech syndicator'
@@ -17,7 +17,6 @@ MIME_URI_LIST = 'text/uri-list'
 NS_ATOM = 'http://www.w3.org/2005/Atom'
 NS_XML = 'http://www.w3.org/XML/1998/namespace'
 
-NSMAP = {None: NS_ATOM, 'xml': NS_XML}
 USER_AGENT = f'{APP_NAME}/{APP_VERSION} ({APP_URI})'
 REQUESTS_HEADERS = {'User-Agent': USER_AGENT, 'From': config.OPERATOR_EMAIL}
 
@@ -42,19 +41,19 @@ ATOM_TYPE = ET.QName(NS_ATOM, 'type')
 ATOM_UPDATED = ET.QName(NS_ATOM, 'updated')
 ATOM_URI = ET.QName(NS_ATOM, 'uri')
 ATOM_VERSION = ET.QName(NS_ATOM, 'version')
-XML_BASE = ET.QName(NS_XML, 'base')
+XML_BASE = f'{NS_XML}base'  # namespaced attributes must be defined like this for typing reasons
 
 
-def getTextContent(e: ET.Element) -> Optional[str]:
+def getTextContent(e: ET._Element) -> Optional[str]:
     '''Returns stripped text if available'''
     return e.text.strip() if e.text is not None else None
 
 
 def getByPath(
-        rel: ET.Element,
-        selector: str,
-        f: Callable[ET.Element,
-                    Optional[str]] = getTextContent) -> Optional[str]:
+    rel: ET._Element,
+    selector: str,
+    f: Callable[[ET._Element],
+                Optional[str]] = getTextContent) -> Optional[str]:
     '''A gross and poor attempt at simulating monads for this one use case'''
     elem = rel.find(selector)
     return f(elem) if elem is not None else None
@@ -64,12 +63,15 @@ class Person:
     """An Atom person construct; not necessarily a natural person, might be a
     'corporation, or similar entity'"""
 
-    def __init__(self, name: str, uri: str = None, email: str = None):
+    def __init__(self,
+                 name: str,
+                 uri: Optional[str] = None,
+                 email: Optional[str] = None):
         self.name = name
         self.uri = uri
         self.email = email
 
-    def atom(self, tag: QName) -> ET.Element:
+    def atom(self, tag: ET.QName) -> ET._Element:
         '''Generate the specified Atom element corresponding to this person'''
         person = ET.Element(tag)
 
@@ -88,7 +90,7 @@ class Person:
 
     # this is a seperate function as a person can also be a contributor, which
     # is represented with a sepereate element. we don't use that here, though
-    def author_atom(self) -> ET.Element:
+    def author_atom(self) -> ET._Element:
         '''Generate the Atom Author element corresponding to this Person'''
         return self.atom(ATOM_AUTHOR)
 
@@ -98,9 +100,9 @@ class Post:
 
     def __init__(self,
                  url: str,
-                 title: str,
-                 summary: str,
-                 published: dt.datetime,
+                 title: Optional[str],
+                 summary: Optional[str],
+                 published: Optional[dt.datetime],
                  updated: Optional[dt.datetime] = None):
         self.url = url
         self.title = title
@@ -108,38 +110,60 @@ class Post:
         self.published = published
         self.updated = updated if updated is not None else published
 
-    def fromElement(post: ET.Element) -> Post:
+    @staticmethod
+    def _publishedTime(post: ET._Element) -> Optional[dt.datetime]:
+        '''parse publication datetime, either with strptime from element
+           content or by attribute from an HTML time element'''
+        published_elem = post.find(config.XPATH_POST_DATETIME)
+        if published_elem is None:
+            pass  # published should stay as None
+        elif config.DATETIME_STRPTIME is not None:  # we have to parse a prose date
+            published_content = getTextContent(published_elem)
+            published_dt = dt.datetime.strptime(
+                published_content, config.DATETIME_STRPTIME
+            ) if published_content is not None else None
+        else:  # we are extracting from a <time> element
+            published_dt = dt.datetime.fromisoformat(
+                published_elem.get('datetime'))
+
+        # ensure that all datetimes have a timezone, even if we have to guess
+        if published_dt is not None and published_dt.tzinfo is None:
+            published_dt = published_dt.replace(
+                tzinfo=config.DATETIME_DEFAULT_TZ)
+
+        return published_dt
+
+    @staticmethod
+    def fromElement(post: ET._Element) -> Optional[Post]:
         '''Creates a Post class from an element on a page of posts'''
 
         url = getByPath(post, config.XPATH_POST_LINK, lambda e: e.get('href'))
         title = getByPath(post, config.XPATH_POST_TITLE)
         summary = getByPath(post, config.XPATH_POST_SUMMARY)
+        published = Post._publishedTime(post)
 
-        # parse publication datetime, either with strptime from element content or by attribute
-        # from an HTML time element
-        published = post.find(config.XPATH_POST_DATETIME)
-        if published is None:
-            pass  # published should stay as None
-        elif config.DATETIME_STRPTIME is not None:
-            published = dt.datetime.strptime(getTextContent(published),
-                                             config.DATETIME_STRPTIME)
+        if url is None:  # at this point there's little point in trying to continue
+            return None
         else:
-            published = dt.datetime.fromisoformat(published.get('datetime'))
+            return Post(url, title, summary, published)
 
-        # ensure that all datetimes have a timezone, even if we have to guess
-        if published.tzinfo is None:
-            published = published.replace(tzinfo=config.DATETIME_DEFAULT_TZ)
-
-        return Post(url, title, summary, published)
-
-    def atom(self) -> ET.Element:
+    def atom(self) -> ET._Element:
         '''Generate an Atom entry corresponding to this Post'''
         entry = ET.Element(ATOM_ENTRY)
         ET.SubElement(entry, ATOM_ID).text = self.url
         ET.SubElement(entry, ATOM_TITLE).text = self.title
-        ET.SubElement(entry, ATOM_PUBLISHED).text = self.published.isoformat()
-        ET.SubElement(entry, ATOM_UPDATED).text = self.updated.isoformat()
         ET.SubElement(entry, ATOM_LINK, rel='alternate', href=self.url)
+
+        if self.published is not None:
+            date_str = self.published.isoformat()
+            ET.SubElement(entry, ATOM_PUBLISHED).text = date_str
+
+        if self.updated is not None:
+            ET.SubElement(entry, ATOM_UPDATED).text = self.updated.isoformat()
+        else:
+            ET.SubElement(entry, ATOM_UPDATED).text = dt.datetime.now(
+                config.DATETIME_DEFAULT_TZ).isoformat()
+
         ET.SubElement(entry,
                       ATOM_CONTENT,
                       attrib={
@@ -157,11 +181,11 @@ class Feed:
     def __init__(self, url: str):
         self.url = url
         # we need a timezone here to avoid TypeErrors
-        self.updated = dt.datetime(1, 1, 1, tzinfo=dt.timezone.utc)
+        self.updated = dt.datetime(1, 1, 1, tzinfo=config.DATETIME_DEFAULT_TZ)
 
     def _update(self):
         '''Update feed if we last updated at least an hour ago'''
-        if self.updated <= (dt.datetime.now(dt.timezone.utc) -
+        if self.updated <= (dt.datetime.now(config.DATETIME_DEFAULT_TZ) -
                             config.SCRAPE_REFRESH):
             self._scrape()
 
@@ -173,7 +197,7 @@ class Feed:
         html = ET.fromstring(r.text, ET.HTMLParser())
 
         # extract data
-        self.updated = dt.datetime.now(dt.timezone.utc)
+        self.updated = dt.datetime.now(config.DATETIME_DEFAULT_TZ)
         self.title = getByPath(html, config.XPATH_TITLE)
         self.author = Person(  # the author; URL and Email are optional
             getByPath(html, config.XPATH_AUTHOR_NAME),
@@ -188,7 +212,13 @@ class Feed:
 
     def atom(self, self_uri: str) -> bytes:
         self._update()  # make sure feed is reasonably up to date
-        feed = ET.Element(ATOM_FEED, attrib={XML_BASE: self.url}, nsmap=NSMAP)
+        feed = ET.Element(
+            ATOM_FEED,
+            attrib={XML_BASE: self.url},
+            nsmap={
+                None: NS_ATOM,  # type: ignore[dict-item]
+                'xml': NS_XML
+            })
 
         # feed generator (for branding and debug)
         ET.SubElement(feed,
