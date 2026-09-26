@@ -12,7 +12,7 @@ REDIRECTS = {'favicon.ico': 'https://s3.amazonaws.com/solidarity.tech/image_uplo
 # Operator Email; will be included in 'From' HTTP header on requests (optional)
 OPERATOR_EMAIL = None
 
-# Should we also scrape the contents of posts for a fuller , or just use solidarity.tech's summary?
+# Should we also scrape the contents of posts for a fuller feed, or just use solidarity.tech's summary?
 SCRAPE_POST_CONTENTS = True
 
 # How often to refresh the feed cache
