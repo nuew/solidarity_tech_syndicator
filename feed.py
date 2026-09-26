@@ -4,6 +4,7 @@ from typing import Callable, Optional
 import config
 import datetime as dt
 import itertools
+import lxml.html
 import requests
 import wsgiref.util
 
@@ -15,6 +16,7 @@ MIME_ATOM = 'application/atom+xml'
 MIME_HTML = 'text/html'
 MIME_URI_LIST = 'text/uri-list'
 NS_ATOM = 'http://www.w3.org/2005/Atom'
+NS_XHTML = 'http://www.w3.org/1999/xhtml'
 NS_XML = 'http://www.w3.org/XML/1998/namespace'
 
 USER_AGENT = f'{APP_NAME}/{APP_VERSION} ({APP_URI})'
@@ -41,7 +43,7 @@ ATOM_TYPE = ET.QName(NS_ATOM, 'type')
 ATOM_UPDATED = ET.QName(NS_ATOM, 'updated')
 ATOM_URI = ET.QName(NS_ATOM, 'uri')
 ATOM_VERSION = ET.QName(NS_ATOM, 'version')
-XML_BASE = f'{NS_XML}base'  # namespaced attributes must be defined like this for typing reasons
+XML_BASE = f'{{{NS_XML}}}base'  # namespaced attributes must be defined like this for typing reasons
 
 
 def getTextContent(e: ET._Element) -> Optional[str]:
@@ -107,6 +109,7 @@ class Post:
         self.url = url
         self.title = title
         self.summary = summary
+        self.contents = None
         self.published = published
         self.updated = updated if updated is not None else published
 
@@ -147,8 +150,37 @@ class Post:
         else:
             return Post(url, title, summary, published)
 
+    def _update(self):
+        '''Update feed if we last updated too long ago'''
+        if config.SCRAPE_POST_CONTENTS and self.updated <= (
+                dt.datetime.now(config.DATETIME_DEFAULT_TZ) -
+                config.SCRAPE_REFRESH_POST_BODIES):
+            self._scrape()
+
+    def _scrape(self):
+        '''Get the actual contents of the post from solidarity.tech'''
+
+        # are we even allowed to scrape individual posts in the first place?
+        if not config.SCRAPE_POST_CONTENTS:
+            return
+
+        # get and parse webpage
+        r = requests.get(self.url, headers=REQUESTS_HEADERS)
+        html = ET.fromstring(r.text, ET.HTMLParser())
+
+        # update the updated time
+        self.updated = dt.datetime.now(config.DATETIME_DEFAULT_TZ)
+
+        # extract body text as an lxml Element, converting that to XHTML
+        body = html.find(config.XPATH_POST_CONTENTS)
+        lxml.html.html_to_xhtml(body)
+        self.contents = [e for e in body.iterchildren()]
+
     def atom(self) -> ET._Element:
         '''Generate an Atom entry corresponding to this Post'''
+
+        self._update()  # make sure body contents are up to date
+
         entry = ET.Element(ATOM_ENTRY)
         ET.SubElement(entry, ATOM_ID).text = self.url
         ET.SubElement(entry, ATOM_TITLE).text = self.title
@@ -164,12 +196,23 @@ class Post:
             ET.SubElement(entry, ATOM_UPDATED).text = dt.datetime.now(
                 config.DATETIME_DEFAULT_TZ).isoformat()
 
-        ET.SubElement(entry,
-                      ATOM_CONTENT,
-                      attrib={
-                          'type': MIME_HTML,
-                          'src': self.url
-                      })
+        if self.contents is None:
+            ET.SubElement(entry,
+                          ATOM_CONTENT,
+                          attrib={
+                              'type': MIME_HTML,
+                              'src': self.url
+                          })
+        else:
+            ET.SubElement(
+                entry,
+                ATOM_CONTENT,
+                attrib={
+                    'type': 'xhtml'
+                },
+                nsmap={
+                    None: NS_XHTML,  # type: ignore[dict-item]
+                }).extend(self.contents)
         ET.SubElement(entry, ATOM_SUMMARY).text = self.summary
 
         return entry
@@ -184,7 +227,7 @@ class Feed:
         self.updated = dt.datetime(1, 1, 1, tzinfo=config.DATETIME_DEFAULT_TZ)
 
     def _update(self):
-        '''Update feed if we last updated at least an hour ago'''
+        '''Update feed if we last updated too long ago'''
         if self.updated <= (dt.datetime.now(config.DATETIME_DEFAULT_TZ) -
                             config.SCRAPE_REFRESH):
             self._scrape()

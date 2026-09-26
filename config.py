@@ -8,8 +8,14 @@ FEEDS = {"posts.xml": "https://demo.solidarity.tech/posts"}
 # Operator Email; will be included in 'From' HTTP header on requests (optional)
 OPERATOR_EMAIL = None
 
+# Should we also scrape the contents of posts for a fuller , or just use solidarity.tech's summary?
+SCRAPE_POST_CONTENTS = True
+
 # How often to refresh the feed cache
 SCRAPE_REFRESH = datetime.timedelta(hours=1)
+
+# How often to refresh post bodies; this might be less often than refreshing the posts list
+SCRAPE_REFRESH_POST_BODIES = SCRAPE_REFRESH
 
 # Root-relative XPath for the title of the feed
 XPATH_TITLE = "./head/title"
@@ -37,6 +43,9 @@ XPATH_POST_TITLE = "./div/div[@class='posts--title']"
 
 # Post-relative XPath for the post's summary
 XPATH_POST_SUMMARY = "./div/div[@class='posts--subtitle']"
+
+# Root-relative XPath for the element containing the post body on the post's individual page
+XPATH_POST_CONTENTS = ".//div[@class='mb-30']"
 
 # Post-relative XPath for the publication datetime of the post
 XPATH_POST_DATETIME = "./div/div/span[@class='mr-20 italics']"
