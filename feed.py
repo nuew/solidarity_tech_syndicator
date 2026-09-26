@@ -317,6 +317,9 @@ def app(environ, start_response):
         atom = feeds[path].atom(wsgiref.util.request_uri(environ))
         start_response('200 OK', [('Content-Type', MIME_ATOM)])
         return [atom]
+    elif path in config.REDIRECTS:
+        start_response('302 Found', [('Location', config.REDIRECTS[path])])
+        return []
     elif len(path) == 0:  # show list of feeds as a URI list for default index
         start_response('200 OK', [('Content-Type', MIME_URI_LIST)])
         app = wsgiref.util.application_uri(environ)

@@ -5,6 +5,10 @@ import datetime
 # A dictionary of all feeds
 FEEDS = {"posts.xml": "https://demo.solidarity.tech/posts"}
 
+# A dictionary of 302 redirects; primarily intended for favicons and temporarily moved feeds
+# If a feed and a redirect conflict, the feed wins.
+REDIRECTS = {'favicon.ico': 'https://s3.amazonaws.com/solidarity.tech/image_uploads/images/000/017/948/original/RackMultipart20230727-22-gjmx0j.png'}
+
 # Operator Email; will be included in 'From' HTTP header on requests (optional)
 OPERATOR_EMAIL = None
 
