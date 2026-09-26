@@ -17,7 +17,6 @@ MIME_HTML = 'text/html'
 MIME_URI_LIST = 'text/uri-list'
 NS_ATOM = 'http://www.w3.org/2005/Atom'
 NS_XHTML = 'http://www.w3.org/1999/xhtml'
-NS_XML = 'http://www.w3.org/XML/1998/namespace'
 
 USER_AGENT = f'{APP_NAME}/{APP_VERSION} ({APP_URI})'
 REQUESTS_HEADERS = {'User-Agent': USER_AGENT, 'From': config.OPERATOR_EMAIL}
@@ -43,7 +42,6 @@ ATOM_TYPE = ET.QName(NS_ATOM, 'type')
 ATOM_UPDATED = ET.QName(NS_ATOM, 'updated')
 ATOM_URI = ET.QName(NS_ATOM, 'uri')
 ATOM_VERSION = ET.QName(NS_ATOM, 'version')
-XML_BASE = f'{{{NS_XML}}}base'  # namespaced attributes must be defined like this for typing reasons
 
 
 def getTextContent(e: ET._Element) -> Optional[str]:
@@ -171,10 +169,16 @@ class Post:
         # update the updated time
         self.updated = dt.datetime.now(config.DATETIME_DEFAULT_TZ)
 
-        # extract body text as an lxml Element, converting that to XHTML
+        # extract body text as an lxml Element, converting that to XHTML, and parenting it under
+        # a new element so that we can have a new default xml namespace (at the cost of an
+        # individual xmlns="{NS_XHTML}" for every entry)
         body = html.find(config.XPATH_POST_CONTENTS)
         lxml.html.html_to_xhtml(body)
-        self.contents = [e for e in body.iterchildren()]
+        self.contents = ET.Element(body.tag,
+                                   attrib=body.attrib,
+                                   nsmap={None:
+                                          NS_XHTML})  # type: ignore[dict-item]
+        self.contents.extend(body.iterchildren())
 
     def atom(self) -> ET._Element:
         '''Generate an Atom entry corresponding to this Post'''
@@ -204,15 +208,11 @@ class Post:
                               'src': self.url
                           })
         else:
-            ET.SubElement(
-                entry,
-                ATOM_CONTENT,
-                attrib={
-                    'type': 'xhtml'
-                },
-                nsmap={
-                    None: NS_XHTML,  # type: ignore[dict-item]
-                }).extend(self.contents)
+            content = ET.SubElement(entry,
+                                    ATOM_CONTENT,
+                                    attrib={'type': 'xhtml'})
+            content.append(self.contents)
+            content.base = self.url
         ET.SubElement(entry, ATOM_SUMMARY).text = self.summary
 
         return entry
@@ -255,13 +255,9 @@ class Feed:
 
     def atom(self, self_uri: str) -> bytes:
         self._update()  # make sure feed is reasonably up to date
-        feed = ET.Element(
-            ATOM_FEED,
-            attrib={XML_BASE: self.url},
-            nsmap={
-                None: NS_ATOM,  # type: ignore[dict-item]
-                'xml': NS_XML
-            })
+        feed = ET.Element(ATOM_FEED,
+                          nsmap={None: NS_ATOM})  # type: ignore[dict-item]
+        feed.base = self.url
 
         # feed generator (for branding and debug)
         ET.SubElement(feed,
