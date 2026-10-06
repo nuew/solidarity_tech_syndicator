@@ -3,10 +3,9 @@ from lxml import etree as ET
 from typing import Callable, Optional
 import config
 import datetime as dt
-import itertools
 import lxml.html
 import requests
-import wsgiref.util
+import urllib.parse
 
 # constants
 APP_NAME = 'solidarity.tech syndicator'
@@ -115,32 +114,27 @@ class Post:
     def _publishedTime(post: ET._Element) -> Optional[dt.datetime]:
         '''parse publication datetime, either with strptime from element
            content or by attribute from an HTML time element'''
-        published_elem = post.find(config.XPATH_POST_DATETIME)
-        if published_elem is None:
-            pass  # published should stay as None
-        elif config.DATETIME_STRPTIME is not None:  # we have to parse a prose date
-            published_content = getTextContent(published_elem)
-            published_dt = dt.datetime.strptime(
-                published_content, config.DATETIME_STRPTIME
-            ) if published_content is not None else None
-        else:  # we are extracting from a <time> element
-            published_dt = dt.datetime.fromisoformat(
-                published_elem.get('datetime'))
+        published_elem = post.find("./div/div/span[@class='mr-20 italics']")
+
+        published_content = getTextContent(
+            published_elem) if published_elem is not None else None
+        published_dt = dt.datetime.strptime(
+            published_content,
+            "%b %d, %Y") if published_content is not None else None
 
         # ensure that all datetimes have a timezone, even if we have to guess
         if published_dt is not None and published_dt.tzinfo is None:
-            published_dt = published_dt.replace(
-                tzinfo=config.DATETIME_DEFAULT_TZ)
-
+            published_dt = published_dt.replace(tzinfo=config.DEFAULT_TZ)
         return published_dt
 
     @staticmethod
     def fromElement(post: ET._Element) -> Optional[Post]:
         '''Creates a Post class from an element on a page of posts'''
 
-        url = getByPath(post, config.XPATH_POST_LINK, lambda e: e.get('href'))
-        title = getByPath(post, config.XPATH_POST_TITLE)
-        summary = getByPath(post, config.XPATH_POST_SUMMARY)
+        url = getByPath(post, "./div/div/a[.='Read More']",
+                        lambda e: e.get('href'))
+        title = getByPath(post, "./div/div[@class='posts--title']")
+        summary = getByPath(post, "./div/div[@class='posts--subtitle']")
         published = Post._publishedTime(post)
 
         if url is None:  # at this point there's little point in trying to continue
@@ -148,26 +142,14 @@ class Post:
         else:
             return Post(url, title, summary, published)
 
-    def _update(self):
-        '''Update feed if we last updated too long ago'''
-        if config.SCRAPE_POST_CONTENTS and self.updated <= (
-                dt.datetime.now(config.DATETIME_DEFAULT_TZ) -
-                config.SCRAPE_REFRESH_POST_BODIES):
-            self._scrape()
-
-    def _scrape(self):
+    def scrape(self):
         '''Get the actual contents of the post from solidarity.tech'''
-
-        # are we even allowed to scrape individual posts in the first place?
-        if not config.SCRAPE_POST_CONTENTS:
-            return
-
         # get and parse webpage
         r = requests.get(self.url, headers=REQUESTS_HEADERS)
         html = ET.fromstring(r.text, ET.HTMLParser())
 
         # update the updated time
-        self.updated = dt.datetime.now(config.DATETIME_DEFAULT_TZ)
+        self.updated = dt.datetime.now(config.DEFAULT_TZ)
 
         # extract body text as an lxml Element, converting that to XHTML, and parenting it under
         # a new element so that we can have a new default xml namespace (at the cost of an
@@ -183,8 +165,6 @@ class Post:
     def atom(self) -> ET._Element:
         '''Generate an Atom entry corresponding to this Post'''
 
-        self._update()  # make sure body contents are up to date
-
         entry = ET.Element(ATOM_ENTRY)
         ET.SubElement(entry, ATOM_ID).text = self.url
         ET.SubElement(entry, ATOM_TITLE).text = self.title
@@ -198,7 +178,7 @@ class Post:
             ET.SubElement(entry, ATOM_UPDATED).text = self.updated.isoformat()
         else:
             ET.SubElement(entry, ATOM_UPDATED).text = dt.datetime.now(
-                config.DATETIME_DEFAULT_TZ).isoformat()
+                config.DEFAULT_TZ).isoformat()
 
         if self.contents is None:
             ET.SubElement(entry,
@@ -221,40 +201,32 @@ class Post:
 class Feed:
     '''A solidarity.tech blog to create an Atom feed for'''
 
-    def __init__(self, url: str):
+    def __init__(self, posts: {str: Post}, url: str):
         self.url = url
-        # we need a timezone here to avoid TypeErrors
-        self.updated = dt.datetime(1, 1, 1, tzinfo=config.DATETIME_DEFAULT_TZ)
-
-    def _update(self):
-        '''Update feed if we last updated too long ago'''
-        if self.updated <= (dt.datetime.now(config.DATETIME_DEFAULT_TZ) -
-                            config.SCRAPE_REFRESH):
-            self._scrape()
-
-    def _scrape(self):
-        '''Scrape Solidarity.Tech blog page'''
 
         # get and parse webpage
         r = requests.get(self.url, headers=REQUESTS_HEADERS)
         html = ET.fromstring(r.text, ET.HTMLParser())
 
-        # extract data
-        self.updated = dt.datetime.now(config.DATETIME_DEFAULT_TZ)
-        self.title = getByPath(html, config.XPATH_TITLE)
+        # extract metadata
+        self.updated = dt.datetime.now(config.DEFAULT_TZ)
+        self.title = getByPath(html, "./head/title")
         self.author = Person(  # the author; URL and Email are optional
-            getByPath(html, config.XPATH_AUTHOR_NAME),
-            getByPath(html, config.XPATH_AUTHOR_URL, lambda e: e.get('href'))
-            if config.XPATH_AUTHOR_URL is not None else None,
-            getByPath(html, config.XPATH_AUTHOR_EMAIL)
-            if config.XPATH_AUTHOR_EMAIL is not None else None)
-        self.icon = getByPath(html, config.XPATH_ICON, lambda e: e.get('href'))
-        self.posts = [
-            Post.fromElement(p) for p in html.iterfind(config.XPATH_POSTS)
-        ]
+            getByPath(html, ".//a[@class='navbar-brand']/span"),
+            getByPath(html, ".//a[@class='navbar-brand']",
+                      lambda e: e.get('href')), config.FEED_AUTHOR_EMAIL)
+        self.icon = getByPath(html, "./head/link[@rel='icon']",
+                              lambda e: e.get('href'))
 
-    def atom(self, self_uri: str) -> bytes:
-        self._update()  # make sure feed is reasonably up to date
+        # extract posts
+        scraped_posts = [
+            Post.fromElement(p)
+            for p in html.iterfind(".//div[@class='posts--section']")
+        ]
+        posts.update({post.url: post for post in scraped_posts})
+        self.posts = [post.url for post in scraped_posts]
+
+    def atom(self, posts: {str: Post}, self_uri: str) -> bytes:
         feed = ET.Element(ATOM_FEED,
                           nsmap={None: NS_ATOM})  # type: ignore[dict-item]
         feed.base = self.url
@@ -302,40 +274,35 @@ class Feed:
             ET.SubElement(feed, ATOM_ICON).text = self.icon
 
         # all posts as atom entries
-        feed.extend(entry.atom() for entry in self.posts)
+        feed.extend(posts[url].atom() for url in self.posts)
 
         return ET.tostring(feed, encoding='utf-8')
 
 
-# global singleton containing all feeds and their internal caches
-feeds = {path: Feed(feed) for path, feed in config.FEEDS.items()}
-
-
-def app(environ, start_response):
-    path = environ['PATH_INFO'][1:]
-    if path in feeds:  # show feed
-        atom = feeds[path].atom(wsgiref.util.request_uri(environ))
-        start_response('200 OK', [('Content-Type', MIME_ATOM)])
-        return [atom]
-    elif path in config.REDIRECTS:
-        start_response('302 Found', [('Location', config.REDIRECTS[path])])
-        return []
-    elif len(path) == 0:  # show list of feeds as a URI list for default index
-        start_response('200 OK', [('Content-Type', MIME_URI_LIST)])
-        app = wsgiref.util.application_uri(environ)
-        brand = f'# {USER_AGENT}\r\n'
-        urls = (f'{app}{feed}\r\n' for feed in feeds.keys())
-        return (t.encode('utf-8') for t in itertools.chain(brand, urls))
-    else:
-        start_response('404 Not Found', [])
-        return []
-
-
 if __name__ == "__main__":
-    from wsgiref.simple_server import make_server
-    import sys
+    posts = {}  # all posts, to avoid scraping duplicates multiple times
+    feeds = {
+        path:
+        Feed(
+            posts, config.SITE + '/posts' +
+            (f'?category={urllib.parse.quote(tag)}' if tag is not None else ''))
+        for path, tag in config.FEEDS.items()
+    }
 
-    port = int(sys.argv[1]) if len(sys.argv) > 1 else 8080
-    host = sys.argv[2] if len(sys.argv) > 2 else ''
-    with make_server(host, port, app) as httpd:
-        httpd.serve_forever()
+    # scrape all posts, if enabled
+    if config.SCRAPE_POST_CONTENTS:
+        for url, post in posts.items():
+            post.scrape()
+
+    # output all feeds
+    for i, (path, feed) in enumerate(feeds.items()):
+        # output feed
+        with open(f'{config.OUTPUT_DIR}/{path}', 'wb') as f:
+            f.write(feed.atom(posts, f'{config.OUTPUT_CANONICAL}/{path}'))
+
+        # output the first feed's icon as 'favicon.ico'; some feed readers use this
+        # (and only this) as their icon for the feed
+        if i == 0 and feed.icon is not None:
+            r = requests.get(feed.icon, headers=REQUESTS_HEADERS)
+            with open(f'{config.OUTPUT_DIR}/favicon.ico', 'wb') as f:
+                f.write(r.content)
