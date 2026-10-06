@@ -284,8 +284,9 @@ if __name__ == "__main__":
     feeds = {
         path:
         Feed(
-            posts, config.SITE + '/posts' +
-            (f'?category={urllib.parse.quote(tag)}' if tag is not None else ''))
+            posts,
+            config.SITE + '/posts' + (f'?category={urllib.parse.quote(tag)}'
+                                      if tag is not None else ''))
         for path, tag in config.FEEDS.items()
     }
 
@@ -303,6 +304,10 @@ if __name__ == "__main__":
         # output the first feed's icon as 'favicon.ico'; some feed readers use this
         # (and only this) as their icon for the feed
         if i == 0 and feed.icon is not None:
-            r = requests.get(feed.icon, headers=REQUESTS_HEADERS)
-            with open(f'{config.OUTPUT_DIR}/favicon.ico', 'wb') as f:
-                f.write(r.content)
+            if config.FAVICON_HTACCESS: # redirect to the favicion via .htaccess
+                with open(f'{config.OUTPUT_DIR}/.htaccess', 'w') as f:
+                    f.write(f'Redirect "/favicon.ico" "{feed.icon}"\n')
+            else: # copy the favicon to this directory
+                r = requests.get(feed.icon, headers=REQUESTS_HEADERS)
+                with open(f'{config.OUTPUT_DIR}/favicon.ico', 'wb') as f:
+                    f.write(r.content)

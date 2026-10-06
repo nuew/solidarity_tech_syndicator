@@ -6,6 +6,9 @@ import datetime
 # RFC conformance
 DEFAULT_TZ = datetime.timezone.utc
 
+# Generate a .htaccess redirecting the favicon instead of downloading and serving a copy
+FAVICON_HTACCESS = False
+
 # A dictionary of all feeds and the tags they syndicate; `None` syndicates all posts
 FEEDS = {"posts.atom": None, "energy_campaign.atom": "Energy Campaign"}
 
