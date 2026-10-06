@@ -128,7 +128,7 @@ class Post:
         return published_dt
 
     @staticmethod
-    def fromElement(post: ET._Element) -> Optional[Post]:
+    def fromElement(post: ET._Element):  # -> Optional[Post] # removed for python 3.6 compat
         '''Creates a Post class from an element on a page of posts'''
 
         url = getByPath(post, "./div/div/a[.='Read More']",
