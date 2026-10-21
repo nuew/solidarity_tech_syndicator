@@ -16,7 +16,6 @@ APP_URI = 'https://github.com/nuew/solidarity_tech_syndicator'
 APP_VERSION = '0.1.1'
 MIME_ATOM = 'application/atom+xml'
 MIME_HTML = 'text/html'
-MIME_URI_LIST = 'text/uri-list'
 NS_ATOM = 'http://www.w3.org/2005/Atom'
 NS_XHTML = 'http://www.w3.org/1999/xhtml'
 
