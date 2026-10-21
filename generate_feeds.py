@@ -6,6 +6,7 @@ import datetime as dt
 import lxml.html
 import requests
 import urllib.parse
+import uuid
 
 # constants
 APP_NAME = 'solidarity.tech syndicator'
@@ -166,7 +167,9 @@ class Post:
         '''Generate an Atom entry corresponding to this Post'''
 
         entry = ET.Element(ATOM_ENTRY)
-        ET.SubElement(entry, ATOM_ID).text = self.url
+        # atom id, which for us is a UUID5 based on the post url
+        # SHA1 is ok as this is not expected to be secure from being reversed
+        ET.SubElement(entry, ATOM_ID).text = uuid.uuid5(uuid.NAMESPACE_URL, self.url).urn
         ET.SubElement(entry, ATOM_TITLE).text = self.title
         ET.SubElement(entry, ATOM_LINK, rel='alternate', href=self.url)
 
@@ -239,8 +242,9 @@ class Feed:
                           'version': APP_VERSION
                       }).text = (APP_NAME)
 
-        # atom id, which for us is just the target url
-        ET.SubElement(feed, ATOM_ID).text = self.url
+        # atom id, which for us is a UUID5 based on the self_uri
+        # SHA1 is ok as this is not expected to be secure from being reversed
+        ET.SubElement(feed, ATOM_ID).text = uuid.uuid5(uuid.NAMESPACE_URL, self_uri).urn
 
         # feed update time
         ET.SubElement(feed, ATOM_UPDATED).text = self.updated.isoformat()
