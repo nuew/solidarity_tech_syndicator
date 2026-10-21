@@ -2,6 +2,12 @@
 # This is the configuration file for the solidarity.tech syndicator.
 import datetime
 
+# Page cache database location; `None` to disable
+CACHE = "./cache.db"
+
+# Time until a cache entry expires.
+CACHE_EXPIRY = datetime.timedelta(weeks=1)
+
 # If no timezone is specified, which should be assigned as a defualt? This is required for strict
 # RFC conformance
 DEFAULT_TZ = datetime.timezone.utc

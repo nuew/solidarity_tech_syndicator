@@ -2,9 +2,11 @@
 from lxml import etree as ET
 from typing import Callable, Optional
 import config
+import copyreg
 import datetime as dt
 import lxml.html
 import requests
+import shelve
 import urllib.parse
 import uuid
 
@@ -109,7 +111,7 @@ class Post:
         self.summary = summary
         self.contents = None
         self.published = published
-        self.updated = updated if updated is not None else published
+        self.updated = updated
 
     @staticmethod
     def _publishedTime(post: ET._Element) -> Optional[dt.datetime]:
@@ -129,7 +131,8 @@ class Post:
         return published_dt
 
     @staticmethod
-    def fromElement(post: ET._Element):  # -> Optional[Post] # removed for python 3.6 compat
+    def fromElement(post: ET._Element
+                    ):  # -> Optional[Post] # removed for python 3.6 compat
         '''Creates a Post class from an element on a page of posts'''
 
         url = getByPath(post, "./div/div/a[.='Read More']",
@@ -163,13 +166,24 @@ class Post:
                                           NS_XHTML})  # type: ignore[dict-item]
         self.contents.extend(body.iterchildren())
 
+    def become(self, other):
+        '''Become another Post; this is necessary to update Posts for caching reasons'''
+        self.url = other.url
+        self.title = other.title
+        self.summary = other.summary
+        self.contents = other.contents
+        self.published = other.published
+        self.updated = other.updated
+
     def atom(self) -> ET._Element:
         '''Generate an Atom entry corresponding to this Post'''
 
         entry = ET.Element(ATOM_ENTRY)
         # atom id, which for us is a UUID5 based on the post url
         # SHA1 is ok as this is not expected to be secure from being reversed
-        ET.SubElement(entry, ATOM_ID).text = uuid.uuid5(uuid.NAMESPACE_URL, self.url).urn
+        ET.SubElement(entry,
+                      ATOM_ID).text = uuid.uuid5(uuid.NAMESPACE_URL,
+                                                 self.url).urn
         ET.SubElement(entry, ATOM_TITLE).text = self.title
         ET.SubElement(entry, ATOM_LINK, rel='alternate', href=self.url)
 
@@ -244,7 +258,8 @@ class Feed:
 
         # atom id, which for us is a UUID5 based on the self_uri
         # SHA1 is ok as this is not expected to be secure from being reversed
-        ET.SubElement(feed, ATOM_ID).text = uuid.uuid5(uuid.NAMESPACE_URL, self_uri).urn
+        ET.SubElement(feed, ATOM_ID).text = uuid.uuid5(uuid.NAMESPACE_URL,
+                                                       self_uri).urn
 
         # feed update time
         ET.SubElement(feed, ATOM_UPDATED).text = self.updated.isoformat()
@@ -284,6 +299,11 @@ class Feed:
 
 
 if __name__ == "__main__":
+    # allow (un)pickling lxml elements
+    copyreg.pickle(
+        lxml.etree._Element, lambda c:
+        (ET.fromstring, (ET.tostring(c, encoding='unicode'), )))
+
     posts = {}  # all posts, to avoid scraping duplicates multiple times
     feeds = {
         path:
@@ -294,8 +314,23 @@ if __name__ == "__main__":
         for path, tag in config.FEEDS.items()
     }
 
-    # scrape all posts, if enabled
-    if config.SCRAPE_POST_CONTENTS:
+    # scrape all posts, if enabled, using a cache if possible
+    if config.SCRAPE_POST_CONTENTS and config.CACHE is not None:
+        with shelve.open(config.CACHE) as d:
+            for url, post in posts.items():
+                if url in d:  # post is cached
+                    cached_post = d[url]
+                    if cached_post.updated + config.CACHE_EXPIRY < dt.datetime.now(
+                            config.DEFAULT_TZ):  # cache is expired
+                        print(f'cache for {url} expired, refreshing')
+                        post.scrape()
+                        d[url] = post  # cache the new post object as we don't enable writeback
+                    else:  # cache is not expired, use it
+                        post.become(cached_post)
+                else:  # post is not cached, get it and create a cache entry
+                    post.scrape()
+                    d[url] = post
+    elif config.SCRAPE_POST_CONTENTS:  # cache is unavailable, download everything
         for url, post in posts.items():
             post.scrape()
 
@@ -308,10 +343,10 @@ if __name__ == "__main__":
         # output the first feed's icon as 'favicon.ico'; some feed readers use this
         # (and only this) as their icon for the feed
         if i == 0 and feed.icon is not None:
-            if config.FAVICON_HTACCESS: # redirect to the favicion via .htaccess
+            if config.FAVICON_HTACCESS:  # redirect to the favicion via .htaccess
                 with open(f'{config.OUTPUT_DIR}/.htaccess', 'w') as f:
                     f.write(f'Redirect "/favicon.ico" "{feed.icon}"\n')
-            else: # copy the favicon to this directory
+            else:  # copy the favicon to this directory
                 r = requests.get(feed.icon, headers=REQUESTS_HEADERS)
                 with open(f'{config.OUTPUT_DIR}/favicon.ico', 'wb') as f:
                     f.write(r.content)
