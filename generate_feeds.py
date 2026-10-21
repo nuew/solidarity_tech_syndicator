@@ -322,7 +322,6 @@ if __name__ == "__main__":
                     cached_post = d[url]
                     if cached_post.updated + config.CACHE_EXPIRY < dt.datetime.now(
                             config.DEFAULT_TZ):  # cache is expired
-                        print(f'cache for {url} expired, refreshing')
                         post.scrape()
                         d[url] = post  # cache the new post object as we don't enable writeback
                     else:  # cache is not expired, use it
