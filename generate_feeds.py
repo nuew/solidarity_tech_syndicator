@@ -311,7 +311,7 @@ class Feed:
         # all posts as atom entries
         feed.extend(posts[url].atom() for url in self.posts)
 
-        return ET.tostring(feed, encoding='utf-8')
+        return ET.tostring(feed, encoding='utf-8', xml_declaration=True)
 
 
 if __name__ == "__main__":
