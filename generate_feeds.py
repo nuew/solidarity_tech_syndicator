@@ -12,7 +12,7 @@ import uuid
 # constants
 APP_NAME = 'solidarity.tech syndicator'
 APP_URI = 'https://github.com/nuew/solidarity_tech_syndicator'
-APP_VERSION = '0.1.1'
+APP_VERSION = '0.2.0'
 MIME_ATOM = 'application/atom+xml'
 MIME_HTML = 'text/html'
 NS_ATOM = 'http://www.w3.org/2005/Atom'
