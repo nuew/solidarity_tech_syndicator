@@ -17,6 +17,7 @@ MIME_ATOM = 'application/atom+xml'
 MIME_HTML = 'text/html'
 NS_ATOM = 'http://www.w3.org/2005/Atom'
 NS_XHTML = 'http://www.w3.org/1999/xhtml'
+NS_XML = 'http://www.w3.org/XML/1998/namespace'
 
 USER_AGENT = f'{APP_NAME}/{APP_VERSION} ({APP_URI})'
 REQUESTS_HEADERS = {'User-Agent': USER_AGENT, 'From': config.OPERATOR_EMAIL}
@@ -42,6 +43,7 @@ ATOM_TYPE = ET.QName(NS_ATOM, 'type')
 ATOM_UPDATED = ET.QName(NS_ATOM, 'updated')
 ATOM_URI = ET.QName(NS_ATOM, 'uri')
 ATOM_VERSION = ET.QName(NS_ATOM, 'version')
+XML_LANG = ET.QName(NS_XML, 'lang')
 
 
 def getTextContent(e: ET._Element) -> Optional[str]:
@@ -250,6 +252,7 @@ class Feed:
                       lambda e: e.get('href')), config.FEED_AUTHOR_EMAIL)
         self.icon = getByPath(html, "./head/link[@rel='icon']",
                               lambda e: e.get('href'))
+        self.lang = html.get('lang')
 
         # extract posts
         scraped_posts = [
@@ -261,6 +264,7 @@ class Feed:
 
     def atom(self, posts: {str: Post}, self_uri: str) -> bytes:
         feed = ET.Element(ATOM_FEED,
+                          attrib={XML_LANG: self.lang},
                           nsmap={None: NS_ATOM})  # type: ignore[dict-item]
         feed.base = self.url
 
