@@ -4,7 +4,6 @@ from typing import Callable, Optional
 import config
 import copyreg
 import datetime as dt
-import lxml.html
 import requests
 import shelve
 import urllib.parse
@@ -58,6 +57,24 @@ def getByPath(
     '''A gross and poor attempt at simulating monads for this one use case'''
     elem = rel.find(selector)
     return f(elem) if elem is not None else None
+
+
+def cleanHTML(html: ET._Element) -> ET._Element:
+    '''Namespace HTML and remove unwanted attributes'''
+    for e in html.iter(ET.Element):
+        # ensure tag is appropriately namespaced
+        if e.tag[0] != '{':
+            e.tag = ET.QName(NS_XHTML, e.tag.lower())
+
+        # delete tags not in allowlist
+        if not e.tag.localname in config.ALLOWLIST_ELEMENTS:
+            e.getparent().remove(e)
+            continue
+
+        # remove attributes not in allowlist
+        for attr in e.keys():
+            if not attr.lower() in config.ALLOWLIST_ATTRIBUTES:
+                del e.attrib[attr]
 
 
 class Person:
@@ -158,7 +175,7 @@ class Post:
         # a new element so that we can have a new default xml namespace (at the cost of an
         # individual xmlns="{NS_XHTML}" for every entry)
         body = html.find(config.XPATH_POST_CONTENTS)
-        lxml.html.html_to_xhtml(body)
+        cleanHTML(body)
         self.contents = ET.Element(body.tag,
                                    attrib=body.attrib,
                                    nsmap={None:
@@ -300,8 +317,8 @@ class Feed:
 if __name__ == "__main__":
     # allow (un)pickling lxml elements
     copyreg.pickle(
-        lxml.etree._Element, lambda c:
-        (ET.fromstring, (ET.tostring(c, encoding='unicode'), )))
+        ET._Element, lambda c: (ET.fromstring,
+                                (ET.tostring(c, encoding='unicode'), )))
 
     posts = {}  # all posts, to avoid scraping duplicates multiple times
     feeds = {
